@@ -1,0 +1,1315 @@
+---
+title: "Single Cell Signaling in Breast Cancer Challenge"
+output:
+  html_document:
+    df_print: paged
+---
+
+#October 8- Exploratory Data Analysis
+
+Will focus solely on Subchallenge I due to time.
+```{r}
+#Import Complete Cell Lines
+
+#install.packages("synapser", repos=c("http://ran.synapse.org", "http://cran.fhcrc.org"))
+#install.packages("synapserutils", repos=c("http://ran.synapse.org", "http://cran.fhcrc.org"))
+
+ library(synapser)
+ library(synapserutils)
+ 
+ synLogin('dimrap96', 'Dir14002!')
+ files <- synapserutils::syncFromSynapse('syn20613593')
+
+```
+
+```{r}
+file1 <- files[[1]]$path
+
+head(file1)
+
+data1 <- read.csv(file1)
+```
+
+
+
+
+
+#Hierarchial Clustering
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggfortify)
+library(fastICA)
+Median_Single_Cell <- read.csv("median_phospho_data.csv")
+
+#Save cell-line names
+Cell_Line_Names <- Median_Single_Cell$cell_line
+
+#Save treatment names
+Treatment_type <-unique(Median_Single_Cell$treatment)
+
+#Subset the data
+
+Phospho_single_sub <- Median_Single_Cell[,-1]
+
+hierarchical_dist_euclid <- dist(Phospho_single_sub, method = "euclidean")
+tree <- hclust(hierarchical_dist_euclid, method="average")
+plot(tree)
+tree_k2 <- cutree(tree, k = 5)
+# plot the tree before running this line 
+rect.hclust(tree, k = 6, h = NULL)
+
+#Count number of NA values within dataset
+dim(Median_Single_Cell)
+
+colSums(is.na(as.data.frame(Median_Single_Cell)))
+```
+
+#Visualize Data
+
+```{r}
+require(ggplot2)
+require(reshape2)
+library(data.table)
+Median_Single_Cell_subset <- cbind(time = Median_Single_Cell$time, cell_line = Median_Single_Cell$cell_line, Median_Single_Cell[,4:40])
+
+Median_Single_Cell <- reshape2::melt(Median_Single_Cell[,4:40] ,  id.vars = 'time', variable.name = 'markers')
+
+keys <- colnames(Median_Single_Cell)[!grepl('value', colnames(Median_Single_Cell))]
+X <- as.data.table(Median_Single_Cell)
+Time_Series_Data <- X[,list(mean_expression=mean(value)),keys]
+
+# plot on same grid, each series colored differently -- 
+# good if the series have same scale
+pdf("Time_Series_plot", height = 8, width = 8)
+ggplot(Time_Series_Data, aes(time,mean_expression)) + geom_line(aes(colour = markers))
+dev.off()
+
+
+Median_Single_Cell <- reshape2::melt(Median_Single_Cell_subset ,  id.vars = 'time', variable.name = 'cell_line')
+
+keys <- colnames(Median_Single_Cell_subset)[!grepl('value', colnames(Median_Single_Cell_subset))]
+X <- as.data.table(Median_Single_Cell_subset)
+Time_Series_Data <- X[,list(mean_expression=mean(value)),keys]
+
+# plot on same grid, each series colored differently -- 
+# good if the series have same scale
+pdf("Time_Series_plot_cell-lines", height = 8, width = 8)
+ggplot(Time_Series_Data, aes(time,mean_expression)) + geom_line(aes(colour = markers))
+dev.off()
+```
+
+```{r}
+#Observe Distributions of variables in dataset
+
+library(plyr)
+library(psych)
+
+pdf("Distribution_Plots", height = 8, width = 8)
+multi.hist(Median_Single_Cell[,sapply(Median_Single_Cell, is.numeric)])
+dev.off()
+```
+
+
+
+#PCA-Clustering by Cell-line
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggfortify)
+library(fastICA)
+
+for(i in 1:ncol(Median_Single_Cell)){
+  Median_Single_Cell[is.na(Median_Single_Cell[,i]), i] <- mean(Median_Single_Cell[,i], na.rm = TRUE)
+}
+Median_Single_subset <- Median_Single_Cell[,4:39]
+
+for(i in 1:ncol(Median_Single_subset)){
+  Median_Single_subset[is.na(Median_Single_subset[,i]), i] <- mean(Median_Single_subset[,i], na.rm = TRUE)
+}
+
+Median_Single_subset_pca <- data.matrix(Median_Single_subset)
+Median_Single_subset_pca <- na.omit(Median_Single_subset_pca)
+
+
+autoplot(prcomp(Median_Single_subset_pca), data = na.omit(Median_Single_Cell), colour="cell_line")
+
+```
+
+#Clustering by Treatment
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggfortify)
+library(fastICA)
+
+for(i in 1:ncol(Median_Single_Cell)){
+  Median_Single_Cell[is.na(Median_Single_Cell[,i]), i] <- mean(Median_Single_Cell[,i], na.rm = TRUE)
+}
+Median_Single_subset <- Median_Single_Cell[,4:39]
+
+for(i in 1:ncol(Median_Single_subset)){
+  Median_Single_subset[is.na(Median_Single_subset[,i]), i] <- mean(Median_Single_subset[,i], na.rm = TRUE)
+}
+
+Median_Single_subset_pca <- data.matrix(Median_Single_subset)
+Median_Single_subset_pca <- na.omit(Median_Single_subset_pca)
+
+
+autoplot(prcomp(Median_Single_subset_pca), data = na.omit(Median_Single_Cell), colour="treatment")
+```
+
+#Silhouette plot
+```{r}
+library(factoextra)
+library(NbClust)
+library(cluster)
+
+set.seed(123)
+#Perform silhouette method of finding optimal number of clusters for kmeans
+fviz_nbclust(Median_Single_subset, kmeans, method = "silhouette")
+```
+
+```{r}
+kmeans_Median <- kmeans(Median_Single_subset, 5, nstart = 25)
+print(kmeans_Median)
+autoplot(prcomp(Median_Single_subset_pca), colour=kmeans_Median$cluster)
+```
+
+
+#tSNE plots
+```{r}
+#install.packages("Rtsne")
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("M3C")
+
+library(Rtsne)
+tsne_matrix <- unique(Median_Single_Cell)
+tsne_out <- Rtsne::Rtsne(tsne_matrix)
+
+library(ggplot2)
+tsne_plot <- data.frame(x = tsne_out$Y[,1], y = tsne_out$Y[,2], col = Median_Single_Cell$cell_line)
+ggplot(tsne_plot) + geom_point(aes(x=x, y=y, color=col))
+```
+
+#ICA-may be good for this dataset
+```{r}
+a <- fastICA(na.omit(Median_Single_subset), 7, alg.typ = "parallel", fun = "logcosh", alpha = 1,
+             method = "R", row.norm = FALSE, maxit = 200,
+             tol = 0.0001, verbose = TRUE,)
+```
+
+#Read in other datasets
+```{r}
+#setwd("/Users/meech/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project")
+proteomics <- read.csv("Proteomics_log2FC.csv", header = T)
+CNV_data <- read.csv("CNV_Marcotte.csv")
+RNA_Seq <- read.csv("RNAseq_Marcotte.csv")
+```
+
+#Filter Datasets and KNN imputation
+```{r}
+head(proteomics)
+head(RNA_Seq)
+head(CNV_data)
+
+#Subset Single Cell phosphoproteomics data
+
+Basal_scData <- subset(Median_Single_Cell, Median_Single_Cell$treatment=="full")
+
+#Eliminate cell lines that are not found in all three: scPhospho, CNV, and RNASeq
+Filtered_Data1<-which(Basal_scData$cell_line %in% CNV_data$X)    
+Filtered_scData<-t(Basal_scData[Filtered_Data1,])
+
+colnames(Filtered_scData) <- Filtered_scData[1,]
+
+Filtered_scData <- Filtered_scData[-1,]
+
+Filtered_Data2<-which(RNA_Seq$X %in% CNV_data$X)    
+Filtered_RNAseq<-t(RNA_Seq[Filtered_Data2,])
+
+colnames(Filtered_RNAseq) <- Filtered_RNAseq[1,]
+
+Filtered_RNAseq <- Filtered_RNAseq[-1,]
+
+CNV_data <- t(CNV_data)
+
+colnames(CNV_data) <- CNV_data[1,]
+
+CNV_data <- CNV_data[-1,]
+
+#Must make sure dataframe columns are in the same order
+
+Filtered_RNAseq <- Filtered_RNAseq[,c(colnames(CNV_data))]
+Filtered_scData <-Filtered_scData[,c(colnames(CNV_data))]
+
+dim(CNV_data)
+dim(Filtered_RNAseq)
+
+
+
+scCol <- colnames(Filtered_scData)
+RNACol <- colnames(Filtered_RNAseq)
+CNVCol <- colnames(CNV_data)
+
+#Filtered_RNAseq[is.na(Filtered_RNAseq)] <- 0
+#Filtered_scData[is.na(Filtered_scData)] <- 0
+#CNV_data[is.na(CNV_data)] <- 0
+
+Filtered_scData <- Filtered_scData[3:39,]
+
+Numeric_DF <- function(m){
+  dims <- dim(m)
+  m <- as.numeric(m)
+  dim(m) <- dims 
+}
+
+head(rownames(Filtered_scData))
+
+Numeric_DF(Filtered_scData)
+Numeric_DF(Filtered_RNAseq)
+Numeric_DF(CNV_data)
+
+class(Filtered_scData) <- "numeric"
+class(Filtered_RNAseq) <- "numeric"
+class(CNV_data) <- "numeric"
+
+
+#Impute using column mean-Exploratory Data Analysis Presentation
+#for(i in 1:ncol(Filtered_scData)){
+#  Filtered_scData[is.na(Filtered_scData[,i]), i] <- knn.imp
+#}
+#for(i in 1:ncol(Filtered_RNAseq)){
+#  Filtered_RNAseq[is.na(Filtered_RNAseq[,i]), i] <- mean(Filtered_RNAseq[,i], na.rm = TRUE)
+#}
+#for(i in 1:ncol(CNV_data)){
+#  CNV_data[is.na(CNV_data[,i]), i] <- mean(CNV_data[,i], na.rm = TRUE)
+#}
+#Filtered_scData <- as.data.frame(sapply(Filtered_scData, as.numeric))
+#Filtered_RNAseq <- as.data.frame(sapply(Filtered_RNAseq, as.numeric))
+#CNV_data <- as.data.frame(sapply(CNV_data, as.numeric))
+
+#Imputation using the knn algorithm
+set.seed(12345)
+library(caret)
+library(RANN)
+
+
+Filtered_scData_knn_Model <- preProcess(Filtered_scData, "knnImpute")
+Filtered_scData_pred <- predict(Filtered_scData_knn_Model, Filtered_scData)
+
+#Filtered_RNAseq_knn_Model <- preProcess(Filtered_RNAseq, "knnImpute")
+#Filtered_RNAseq_pred <- predict(Filtered_RNAseq_knn_Model, #Filtered_RNAseq)
+
+
+Filtered_CNV_knn_Model <- preProcess(CNV_data, "knnImpute")
+Filtered_CNV_pred <- predict(Filtered_CNV_knn_Model, CNV_data)
+
+
+str(Filtered_RNAseq)
+
+
+Filtered_Data3<-which(row.names(Filtered_RNAseq) %in% row.names(CNV_data)) 
+Filtered_RNAseq<-Filtered_RNAseq[Filtered_Data3,]
+
+
+Datasets_List <- list(scPhospho=as.data.frame(Filtered_scData_pred), CNV=as.data.frame(Filtered_CNV_pred))
+
+str(Filtered_scData_pred)
+str(Filtered_RNAseq)
+str(Filtered_CNV_pred)
+sapply(Datasets_List, dim)
+
+```
+
+#Omicade package for multiOmics
+```{r}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("omicade4")
+#intersect(RNACol, CNVCol)
+
+library(omicade4)
+ ?mcia
+mcoin <- mcia(Datasets_List, cia.nf=10)
+
+class(mcoin)
+```
+
+```{r}
+type <- colnames(Datasets_List$scPhospho)
+type <- sapply(strsplit(type, split="\\."), function(x) x[1])
+type
+
+plot(mcoin, axes = 1:2, phenovec=type, sample.lab=FALSE, df.color=1:2)
+```
+
+```{r}
+melan_gene <- selectVar(mcoin, a1.lim=c(1, Inf), a2.lim=c(-Inf, Inf))
+melan_gene
+```
+
+#Use PCs 1 and 3 to produce plots
+```{r}
+plot(mcoin, axes=c(1, 3), phenovec=type, sample.lab=FALSE, df.color=1:2)
+```
+
+#Use PCs 2 and 3 to produce plots
+```{r}
+plot(mcoin, axes=c(2, 3), phenovec=type, sample.lab=FALSE, df.color=1:2)
+```
+
+Note the difference in variability between samples
+
+#mixOmics
+```{r}
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+
+#BiocManager::install("mixOmics")
+library(mixOmics)
+```
+
+#Evaluate expression levels of genes provided from RNA Seq data
+```{r}
+RNA <- as.data.frame(Filtered_RNAseq)
+MyResult.pca <- pca(t(RNA))     
+plotIndiv(MyResult.pca, group = colnames(RNA), legend = F, title = "Breast Cancer Signaling: Gene Expression comp 1-2")
+```
+
+#Principal Components 1-3
+```{r}
+MyResult.pca2 <- pca(t(RNA), ncomp = 3)     
+plotIndiv(MyResult.pca2, comp= c(1,3), group = colnames(RNA), legend = F, title = "Breast Cancer Signaling: Gene Expression Comp 1-3")
+```
+
+
+```{r}
+plot(MyResult.pca2)
+```
+
+```{r}
+plotIndiv(MyResult.pca2,
+          group = colnames(RNA), style="3d",
+          legend = TRUE, title = 'Breast Cancer Signaling: Gene Expression Comp 1-3')
+```
+
+
+
+#November 21 or December I guess
+
+
+#Re-run data-preprocessing
+
+#Imputation using KNN
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project")
+Median_Single_Cell <- read.csv("median_phospho_data.csv")
+#Imputation using the knn algorithm
+set.seed(12345)
+
+#install.packages("caret")
+#install.packages("RANN")
+#install.packages("data.table")
+
+library(caret)
+library(RANN)
+
+
+Filtered_scData_knn_Model <- preProcess(Median_Single_Cell, "knnImpute")
+Filtered_scData_pred <- predict(Filtered_scData_knn_Model, Median_Single_Cell)
+```
+
+#Check Distribution again
+```{r}
+library(plyr)
+library(psych)
+
+pdf("Imputed_Distribution_Plots", height = 8, width = 8)
+multi.hist(Filtered_scData_pred[,sapply(Filtered_scData_pred, is.numeric)])
+dev.off()
+```
+
+#PCA and ICA again post imputation
+```{r}
+#Perform PCA on median single cell dataset
+Filtered_scData_pred<- Filtered_scData_pred[,!names(Filtered_scData_pred)%in%"time"]
+Phospho_single_sub <- na.omit(Filtered_scData_pred[,2:39])
+Phospho_single_pca <- data.matrix(Phospho_single_sub)
+
+pdf("PCA_scPhospho.pdf", height = 8, width = 8)
+autoplot(prcomp(Phospho_single_pca), colour="treatment")
+dev.off()
+```
+
+#ICA
+```{r}
+a <- fastICA(na.omit(Phospho_single_sub[2:38]), 7, alg.typ = "parallel", fun = "logcosh", alpha = 1,
+             method = "R", row.norm = FALSE, maxit = 200,
+             tol = 0.0001, verbose = TRUE,)
+
+pdf("ICA_heatmap.pdf", height = 8, width = 8)
+heatmap(a$S)
+dev.off()
+```
+
+
+#This dataset requires multiple logistic regression. I am looking to predict multiple missing markers based on cell lines rather than each marker individually.
+
+
+```{r}
+#First must create a dataframe of solely numeric variables from imputed dataset
+library(dplyr)
+
+single_cell_num <- data.frame(matrix(ncol = 37, nrow = 0))
+
+scNames <-colnames(Phospho_single_sub[2:38])
+
+colnames(single_cell_num) <- scNames
+
+single_cell_num <<- dplyr::select(Phospho_single_sub, scNames)
+
+#Must check if every column is numeric
+
+sapply(single_cell_num, class)
+
+#install.packages("FSA")
+library(FSA)
+
+#Check dataframe
+headtail(single_cell_num)
+
+```
+
+#Correlation
+```{r}
+correlation_matrix = cor(single_cell_num)
+
+#install.packages("corrplot")
+library(corrplot)
+
+pdf("Correlation_Median_sc", height = 8, width = 8)
+corrplot(correlation_matrix, order="hclust")
+dev.off()
+```
+
+```{r}
+library(tidyverse)
+library(caret)
+library(glmnet)
+library(corrplot)
+library(randomForest)
+highly_correlated <- colnames(single_cell_num)[findCorrelation(correlation_matrix, cutoff = 0.7, verbose = T)]
+
+highly_correlated
+
+#Highly correlated variables are p.S6K, p.p90RSK, p.PLCg2, and GAPDH
+```
+
+
+```{r}
+#install.packages("psych")
+
+library(psych)
+
+pvalue_corr_test <-corr.test(single_cell_num, use = "pairwise", method = "spearman", adjust = "none", alpha = 0.05)
+
+pvalue_corr_test
+```
+
+
+#Feature selection
+```{r}
+#Detailed as one of the kernel based methods used in the Nature Biotechnology paper, feature selection was performed by using both sequential forward selection and sequential backward selection.
+
+library(MASS)
+
+res.lm <- lm(p.Akt.Ser473. + p.ERK + p.HER2 + p.PLCg2 + p.S6 ~., data= single_cell_num)
+
+step <- stepAIC(res.lm, direction = "both", trace = F)
+step
+
+summary(step)
+
+#Judging by feature selection, I can omit b.CATENIN, Ki.67, p.JNK, and p.STAT1.
+Not_Significant <- c("b.CATENIN", "Ki.67", "p.JNK", "p.STAT1")
+```
+
+
+#Feature Selection 2: Boruta
+```{r}
+library(Boruta)
+
+boruta_output <- Boruta(p.Akt.Ser473. + p.ERK + p.HER2 + p.PLCg2 + p.S6 ~., data= single_cell_num, doTrace=2)
+```
+
+
+
+```{r}
+significant <- names(boruta_output$finalDecision[boruta_output$finalDecision %in% c("Confirmed", "Tentative")])  # collect Confirmed and Tentative variables
+print(significant)
+```
+
+
+
+```{r}
+plot(boruta_output, cex.axis=.7, las=2, xlab="", main="Variable Importance")
+
+#Now able to create a list of predictor variables
+Predictor_Variables <- significant[!significant%in%highly_correlated]
+Predictor_Variables <- Predictor_Variables[!Predictor_Variables%in%Not_Significant]
+
+Predictor_Variables <- paste(Predictor_Variables, collapse = "+")
+```
+
+
+#Multiple Target Linear Regression
+
+
+#Neural Network Before Feature Selection
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/Subchallenge I")
+#Must use Neural Nets to build this model
+library(neuralnet)
+
+##VERY IMPORTANT TO NORMALIZE DATA FOR NEURAL NETS
+
+Normalize <- function(x){
+  return((x-min(x))/(max(x)-min(x)))
+}
+
+Normalized_sc_Data <- as.data.frame(lapply(single_cell_num, Normalize))
+#Next, Must create training and test sets
+
+#Set training size to same size used in the Nature paper
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_sc_Data[-train_ind,]
+
+#Create Formula
+All_Markers <- paste(significant, collapse = "+")
+nn_formula= paste("p.Akt.Ser473. + p.ERK + p.HER2 + p.PLCg2 + p.S6 ~", All_Markers, collapse = "+")
+
+
+scPhospho_Model <- neuralnet(nn_formula, data = training_set, hidden = c(5,3), linear.output = F, stepmax = 1e6)
+```
+
+
+
+```{r}
+pdf("Neural_Network_DREAM_No_FeatureSelection", height = 8, width = 8)
+plot(scPhospho_Model)
+dev.off()
+
+model_results = compute(scPhospho_Model, test_set[,1:37])
+
+str(test_set[,1:37])
+
+predicted_strength = model_results$net.result
+
+cor(predicted_strength, test_set$strength)
+
+predicted_strength[1:5,]
+```
+
+
+#RMSEP Calculation
+```{r}
+Missing_Markers <- c("p.Akt.Ser473.","p.ERK","p.HER2","p.PLCg2","p.S6")
+
+pred_test_set <- test_set[,names(test_set)%in%Missing_Markers]
+
+prob = compute(scPhospho_Model, test_set)
+prob.result <- prob$net.result
+
+pred <- predict(scPhospho_Model, test_set)
+
+sc.rmse <- sqrt(colMeans(pred - pred_test_set)^2)
+
+sc.rmse
+
+```
+
+#Neural Network After Feature Selection
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/Subchallenge I")
+#Must use Neural Nets to build this model
+library(neuralnet)
+
+##VERY IMPORTANT TO NORMALIZE DATA FOR NEURAL NETS
+
+Normalize <- function(x){
+  return((x-min(x))/(max(x)-min(x)))
+}
+
+Normalized_sc_Data <- as.data.frame(lapply(single_cell_num, Normalize))
+#Next, Must create training and test sets
+
+#Set training size to same size used in the Nature paper
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_sc_Data[-train_ind,]
+
+
+
+#Create Formula
+
+nn_formula= paste("p.Akt.Ser473. + p.ERK + p.HER2 + p.PLCg2 + p.S6 ~", Predictor_Variables, collapse = "+")
+
+
+scPhospho_Model <- neuralnet(nn_formula, data = training_set, hidden = c(5,3), linear.output = F, stepmax = 1e6)
+```
+
+```{r}
+pdf("Neural_Network_DREAM", height = 8, width = 8)
+plot(scPhospho_Model)
+dev.off()
+
+model_results = compute(scPhospho_Model, test_set[,1:37])
+
+str(test_set[,1:37])
+
+predicted_strength = model_results$net.result
+
+cor(predicted_strength, test_set$strength)
+
+predicted_strength[1:5,]
+```
+
+
+
+#Neural Network RMSEP
+```{r}
+
+Missing_Markers <- c("p.Akt.Ser473.","p.ERK","p.HER2","p.PLCg2","p.S6")
+
+pred_test_set <- test_set[,names(test_set)%in%Missing_Markers]
+
+prob = compute(scPhospho_Model, test_set)
+prob.result <- prob$net.result
+
+pred <- predict(scPhospho_Model, test_set)
+
+sc.rmse <- sqrt(colMeans(pred - pred_test_set)^2)
+
+sc.rmse
+```
+
+
+#Use Neural Network Model (Post Feature Selection) on Test dataset from DREAM challenge
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/SubChallenge1")
+
+AU565_data <- read.csv("AU565.csv", header = T)
+AU565_data_subset <- AU565_data[,6:42]
+
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/Subchallenge I")
+#Must use Neural Nets to build this model
+library(neuralnet)
+
+##VERY IMPORTANT TO NORMALIZE DATA FOR NEURAL NETS
+
+Normalize <- function(x){
+  return((x-min(x))/(max(x)-min(x)))
+}
+
+#This will be used for the training set only
+Normalized_sc_Data <- as.data.frame(lapply(single_cell_num, Normalize))
+
+#Normalizing Test data
+
+Normalized_AU565_data <- as.data.frame(lapply(AU565_data_subset, Normalize))
+
+#Next, Must create training and test sets
+
+#Set training size to same size used in the Nature paper
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_AU565_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+#Create Formula
+
+nn_formula= paste("p.Akt.Ser473. + p.ERK + p.HER2 + p.PLCg2 + p.S6 ~", Predictor_Variables, collapse = "+")
+
+
+scPhospho_Model <- neuralnet(nn_formula, data = training_set, hidden = c(5,3), linear.output = F, stepmax = 1e6)
+
+```
+
+
+
+#Test Model
+```{r}
+model_results = compute(scPhospho_Model, test_set[,1:37])
+
+str(test_set[,1:37])
+
+predicted_strength = model_results$net.result
+
+cor(predicted_strength, test_set$strength)
+
+predicted_strength[1:5,]
+
+pred_test_set <- test_set[,names(test_set)%in%Missing_Markers]
+
+prob = compute(scPhospho_Model, test_set)
+prob.result <- prob$net.result
+
+pred <- predict(scPhospho_Model, test_set)
+
+sc.rmse <- sqrt(colMeans(pred - pred_test_set)^2)
+
+sc.rmse
+```
+
+
+
+#EFM19 Test
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/SubChallenge1")
+
+EFM19_data <- read.csv("EFM19.csv", header = T)
+EFM19_data_subset <- EFM19_data[,6:42]
+
+#This will be used for the training set only
+Normalized_sc_Data <- as.data.frame(lapply(single_cell_num, Normalize))
+
+#Normalizing Test data
+
+Normalized_EFM19_data <- as.data.frame(lapply(EFM19_data_subset, Normalize))
+
+#Next, Must create training and test sets
+
+#Set training size to same size used in the Nature paper
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_EFM19_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+
+model_results = compute(scPhospho_Model, test_set[,1:37])
+
+str(test_set[,1:37])
+
+predicted_strength = model_results$net.result
+
+cor(predicted_strength, test_set$strength)
+
+predicted_strength[1:5,]
+
+pred_test_set <- test_set[,names(test_set)%in%Missing_Markers]
+
+prob = compute(scPhospho_Model, test_set)
+prob.result <- prob$net.result
+
+pred <- predict(scPhospho_Model, test_set, na.action())
+
+sc.rmse <- sqrt(colMeans(pred - pred_test_set)^2)
+
+sc.rmse
+```
+
+
+#HCC2218 TEST
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/SubChallenge1")
+
+HCC2218_data <- read.csv("HCC2218.csv", header = T)
+HCC2218_data_subset <- HCC2218_data[,6:42]
+
+#This will be used for the training set only
+Normalized_sc_Data <- as.data.frame(lapply(single_cell_num, Normalize))
+
+#Normalizing Test data
+
+Normalized_HCC2218_data <- as.data.frame(lapply(HCC2218_data_subset, Normalize))
+
+#Next, Must create training and test sets
+
+#Set training size to same size used in the Nature paper
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_HCC2218_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+
+model_results = compute(scPhospho_Model, test_set[,1:37])
+
+str(test_set[,1:37])
+
+predicted_strength = model_results$net.result
+
+cor(predicted_strength, test_set$strength)
+
+predicted_strength[1:5,]
+
+pred_test_set <- test_set[,names(test_set)%in%Missing_Markers]
+
+prob = compute(scPhospho_Model, test_set)
+prob.result <- prob$net.result
+
+pred <- predict(scPhospho_Model, test_set)
+
+sc.rmse <- sqrt(colMeans(pred - pred_test_set)^2)
+
+sc.rmse
+```
+
+
+
+
+#LY2 Test
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/SubChallenge1")
+
+LY2_data <- read.csv("LY2.csv", header = T)
+LY2_data_subset <- LY2_data[,6:42]
+
+#This will be used for the training set only
+Normalized_sc_Data <- as.data.frame(lapply(single_cell_num, Normalize))
+
+#Normalizing Test data
+
+Normalized_LY2_data <- as.data.frame(lapply(LY2_data_subset, Normalize))
+
+#Next, Must create training and test sets
+
+#Set training size to same size used in the Nature paper
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_LY2_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+
+model_results = compute(scPhospho_Model, test_set[,1:37])
+
+str(test_set[,1:37])
+
+predicted_strength = model_results$net.result
+
+cor(predicted_strength, test_set$strength)
+
+predicted_strength[1:5,]
+
+pred_test_set <- test_set[,names(test_set)%in%Missing_Markers]
+
+prob = compute(scPhospho_Model, test_set)
+prob.result <- prob$net.result
+
+pred <- predict(scPhospho_Model, test_set)
+
+sc.rmse <- sqrt(colMeans(pred - pred_test_set)^2)
+
+sc.rmse
+```
+
+
+
+#MACLS2 Test
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/SubChallenge1")
+
+MACLS2_data <- read.csv("MACLS2.csv", header = T)
+MACLS2_data_subset <- MACLS2_data[,6:42]
+
+#This will be used for the training set only
+Normalized_sc_Data <- as.data.frame(lapply(single_cell_num, Normalize))
+
+#Normalizing Test data
+
+Normalized_MACLS2_data <- as.data.frame(lapply(MACLS2_data_subset, Normalize))
+
+#Next, Must create training and test sets
+
+#Set training size to same size used in the Nature paper
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_MACLS2_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+
+model_results = compute(scPhospho_Model, test_set[,1:37])
+
+str(test_set[,1:37])
+
+predicted_strength = model_results$net.result
+
+cor(predicted_strength, test_set$strength)
+
+predicted_strength[1:5,]
+
+pred_test_set <- test_set[,names(test_set)%in%Missing_Markers]
+
+prob = compute(scPhospho_Model, test_set)
+prob.result <- prob$net.result
+
+pred <- predict(scPhospho_Model, test_set)
+
+sc.rmse <- sqrt(colMeans(pred - pred_test_set)^2)
+
+sc.rmse
+```
+
+
+#MDAMB436 Test
+```{r}
+setwd("~/Desktop/Master's/Masters_Year_2/Fall_2019/Machine_Learning/Project/SubChallenge1")
+
+MDAMB436_data <- read.csv("MDAMB436.csv", header = T)
+MDAMB436_data_subset <- MDAMB436_data[,6:42]
+
+#This will be used for the training set only
+Normalized_sc_Data <- as.data.frame(lapply(single_cell_num, Normalize))
+
+#Normalizing Test data
+
+Normalized_MDAMB436_data <- as.data.frame(lapply(MDAMB436_data_subset, Normalize))
+
+#Next, Must create training and test sets
+
+#Set training size to same size used in the Nature paper
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_MDAMB436_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+
+model_results = compute(scPhospho_Model, test_set[,1:37])
+
+str(test_set[,1:37])
+
+predicted_strength = model_results$net.result
+
+cor(predicted_strength, test_set$strength)
+
+predicted_strength[1:5,]
+
+pred_test_set <- test_set[,names(test_set)%in%Missing_Markers]
+
+prob = compute(scPhospho_Model, test_set)
+prob.result <- prob$net.result
+
+pred <- predict(scPhospho_Model, test_set)
+
+sc.rmse <- sqrt(colMeans(pred - pred_test_set)^2)
+
+sc.rmse
+```
+
+
+#Random Forest
+```{r}
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_sc_Data[-train_ind,]
+#install.packages("randomForestSRC")
+library(randomForestSRC)
+rf <- rfsrc(Multivar(p.Akt.Ser473. + p.ERK + p.HER2 + p.PLCg2 + p.S6) ~ cleavedCas+CyclinB+IdU+p.4EBP1+p.AKT.Thr308.+p.AMPK+p.BTK+p.CREB+p.FAK+p.GSK3b+p.H3+p.MAP2K3+p.MAPKAPK2+p.MEK+p.MKK3.MKK6+p.MKK4+p.NFkB+p.p38+p.p53+p.PDPK1+p.RB+p.SMAD23+p.SRC+p.STAT3+p.STAT5, data = training_set)
+
+pred = predict.rfsrc(rf, newdata=test_set)
+
+print(rf)
+print(pred)
+
+
+
+RMSE(pred$regrOutput$p.Akt.Ser473.$predicted, pred_test_set$p.Akt.Ser473.)
+RMSE(pred$regrOutput$p.ERK$predicted, pred_test_set$p.ERK)
+RMSE(pred$regrOutput$p.HER2$predicted, pred_test_set$p.HER2)
+RMSE(pred$regrOutput$p.PLCg2$predicted, pred_test_set$p.PLCg2)
+RMSE(pred$regrOutput$p.S6$predicted, pred_test_set$p.S6)
+```
+
+
+
+#Test Models on Datasets
+
+#AU565
+```{r}
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_AU565_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+pred = predict.rfsrc(rf, newdata=test_set)
+RMSE(pred$regrOutput$p.Akt.Ser473.$predicted, pred_test_set$p.Akt.Ser473.)
+RMSE(pred$regrOutput$p.ERK$predicted, pred_test_set$p.ERK)
+RMSE(pred$regrOutput$p.HER2$predicted, pred_test_set$p.HER2)
+RMSE(pred$regrOutput$p.PLCg2$predicted, pred_test_set$p.PLCg2)
+RMSE(pred$regrOutput$p.S6$predicted, pred_test_set$p.S6)
+```
+
+
+
+
+#EFM19
+```{r}
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_EFM19_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+pred = predict.rfsrc(rf, newdata=test_set)
+RMSE(pred$regrOutput$p.Akt.Ser473.$predicted, pred_test_set$p.Akt.Ser473.)
+RMSE(pred$regrOutput$p.ERK$predicted, pred_test_set$p.ERK)
+RMSE(pred$regrOutput$p.HER2$predicted, pred_test_set$p.HER2)
+RMSE(pred$regrOutput$p.PLCg2$predicted, pred_test_set$p.PLCg2)
+RMSE(pred$regrOutput$p.S6$predicted, pred_test_set$p.S6)
+```
+
+
+
+
+#HCC2218
+```{r}
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_HCC2218_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+pred = predict.rfsrc(rf, newdata=test_set)
+RMSE(pred$regrOutput$p.Akt.Ser473.$predicted, pred_test_set$p.Akt.Ser473.)
+RMSE(pred$regrOutput$p.ERK$predicted, pred_test_set$p.ERK)
+RMSE(pred$regrOutput$p.HER2$predicted, pred_test_set$p.HER2)
+RMSE(pred$regrOutput$p.PLCg2$predicted, pred_test_set$p.PLCg2)
+RMSE(pred$regrOutput$p.S6$predicted, pred_test_set$p.S6)
+```
+
+
+
+#LY2
+```{r}
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_LY2_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+pred = predict.rfsrc(rf, newdata=test_set)
+RMSE(pred$regrOutput$p.Akt.Ser473.$predicted, pred_test_set$p.Akt.Ser473.)
+RMSE(pred$regrOutput$p.ERK$predicted, pred_test_set$p.ERK)
+RMSE(pred$regrOutput$p.HER2$predicted, pred_test_set$p.HER2)
+RMSE(pred$regrOutput$p.PLCg2$predicted, pred_test_set$p.PLCg2)
+RMSE(pred$regrOutput$p.S6$predicted, pred_test_set$p.S6)
+```
+
+
+
+#MACLS2
+```{r}
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_MACLS2_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+pred = predict.rfsrc(rf, newdata=test_set)
+RMSE(pred$regrOutput$p.Akt.Ser473.$predicted, pred_test_set$p.Akt.Ser473.)
+RMSE(pred$regrOutput$p.ERK$predicted, pred_test_set$p.ERK)
+RMSE(pred$regrOutput$p.HER2$predicted, pred_test_set$p.HER2)
+RMSE(pred$regrOutput$p.PLCg2$predicted, pred_test_set$p.PLCg2)
+RMSE(pred$regrOutput$p.S6$predicted, pred_test_set$p.S6)
+```
+
+
+
+#MDAMB436
+```{r}
+training_size = floor(0.75*nrow(Normalized_sc_Data))
+
+set.seed(123)
+train_ind <- sample(seq_len(nrow(Normalized_sc_Data)), size = training_size)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_MDAMB436_data[-train_ind,]
+
+#Replace all NA values with 0
+test_set[is.na(test_set)] <-0
+
+pred = predict.rfsrc(rf, newdata=test_set)
+RMSE(pred$regrOutput$p.Akt.Ser473.$predicted, pred_test_set$p.Akt.Ser473.)
+RMSE(pred$regrOutput$p.ERK$predicted, pred_test_set$p.ERK)
+RMSE(pred$regrOutput$p.HER2$predicted, pred_test_set$p.HER2)
+RMSE(pred$regrOutput$p.PLCg2$predicted, pred_test_set$p.PLCg2)
+RMSE(pred$regrOutput$p.S6$predicted, pred_test_set$p.S6)
+```
+
+
+
+```{r}
+#install.packages("caretEnsemble")
+library(dplyr)
+library(ggplot2)
+library(PerformanceAnalytics)
+library(ggthemes)
+library(corrplot)
+library(car)
+library(psych)
+library(caret)
+library(caretEnsemble)
+library(doParallel)
+
+registerDoParallel(4)
+getDoParWorkers()
+set.seed(123)
+my_control <- trainControl(method = "cv", # for “cross-validation”
+                           number = 5, # number of k-folds
+                           savePredictions = "final",
+                           allowParallel = TRUE)
+
+training_set=Normalized_sc_Data[train_ind,]
+test_set= Normalized_sc_Data[-train_ind,]
+
+y <- single_cell_num[,names(single_cell_num)%in%Missing_Markers]
+set.seed(123)
+part.index <- createDataPartition(cbind(single_cell_num$p.Akt.Ser473., single_cell_num$p.ERK, single_cell_num$p.HER2, single_cell_num$p.PLCg2, single_cell_num$p.S6), 
+                                  p = 0.75,                         
+                                  list = FALSE)
+X_train <- single_cell_num[part.index, ]
+X_test <- single_cell_num[-part.index, ]
+y_train <- y[part.index]
+y_test <- y[-part.index]
+
+set.seed(222)
+model_list <- caretList(p.Akt.Ser473. + p.ERK + p.HER2 + p.PLCg2 + p.S6 ~ cleavedCas+CyclinB+IdU+p.4EBP1+p.AKT.Thr308.+p.AMPK+p.BTK+p.CREB+p.FAK+p.GSK3b+p.H3+p.MAP2K3+p.MAPKAPK2+p.MEK+p.MKK3.MKK6+p.MKK4+p.NFkB+p.p38+p.p53+p.PDPK1+p.RB+p.SMAD23+p.SRC+p.STAT3+p.STAT5, trControl = my_control, methodList = c("svmRadial", "rf", "xgbTree"), tuneList = NULL,
+continue_on_fail = FALSE, preProcess = c("center","scale"), data=training_set)
+
+#View Results
+model_list$svmRadial
+model_list$rf
+model_list$xgbTree
+```
+
+
+#RMSE Values for Models
+```{r}
+options(digits = 3)
+model_results <- data.frame(
+ SVM = min(model_list$svmRadial$results$RMSE),
+ RF = min(model_list$rf$results$RMSE),
+ XGBT = min(model_list$xgbTree$results$RMSE))
+
+print(model_results)
+
+#SVM had the lowest RMSE score
+
+resamples <- resamples(model_list)
+dotplot(resamples, metric = "RMSE")
+
+modelCor(resamples)
+
+set.seed(222)
+ensemble_1 <- caretEnsemble(model_list, 
+                            metric = "RMSE", 
+                            trControl = my_control)
+summary(ensemble_1)
+```
+
+
+
+```{r}
+plot(ensemble_1)
+
+set.seed(222)
+ensemble_2 <- caretStack(model_list, 
+                         method = "glmnet", 
+                         metric = "RMSE", 
+                         trControl = my_control)
+print(ensemble_2)
+```
+
+
+
+#Test on the testing set
+```{r}
+test_set= Normalized_sc_Data[-train_ind,]
+
+# PREDICTIONS
+pred_svm <- predict(model_list$svmRadial, newdata = test_set)
+pred_rf <- predict.train(model_list$rf, newdata = test_set)
+pred_xgbT <- predict.train(model_list$xgbTree, newdata = test_set)
+predict_ens1 <- predict(ensemble_1, newdata = test_set)
+predict_ens2 <- predict(ensemble_2, newdata = test_set)
+# RMSE
+pred_RMSE <- data.frame(ensemble_1 = RMSE(predict_ens1, test_set),
+                        ensemble_2 = RMSE(predict_ens2, test_set),
+                        SVM = RMSE(pred_svm, test_set),
+                        RF = RMSE(pred_rf, test_set),
+                        XGBT = RMSE(pred_xgbT, test_set))
+print(pred_RMSE)
+```
+
+#Models Failed. This may not be the best method.
